@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 from prophet import Prophet
@@ -6,25 +5,19 @@ from datetime import datetime, timedelta
 import numpy as np
 import requests
 
-st.set_page_config(page_title="환율 + 뉴스 감성 예측 AI", layout="wide")
-st.title("💱 환율 + 감성 기반 예측 AI")
+st.set_page_config(page_title="환율 예측 AI", layout="wide")
+st.title("💱 환율 예측 AI 시스템")
 
+# ====== STEP 1: 한국은행 API로 환율 가져오기 ======
 @st.cache_data
 def fetch_exchange_rate():
-    API_KEY = "99BO6UEVOS1ZHTSHK79J"
+    API_KEY = "99BO6UEVOS1ZHTSHK79J" 
     start_date = "20240101"
     end_date = datetime.today().strftime("%Y%m%d")
     url = f"http://ecos.bok.or.kr/api/StatisticSearch/{API_KEY}/json/kr/1/1000/036Y001/DD/{start_date}/{end_date}/0002"
 
     try:
         response = requests.get(url)
-
-        st.write("📡 응답 상태 코드:", response.status_code)
-        try:
-            st.json(response.json())
-        except Exception as e:
-            st.error(f"JSON 파싱 실패: {e}")
-
         data = response.json()
         rows = data['StatisticSearch']['row']
         df = pd.DataFrame(rows)
@@ -34,46 +27,38 @@ def fetch_exchange_rate():
         df['y'] = df['y'].astype(float)
         return df
     except Exception as e:
-        st.error(f"환율 API 로딩 실패: {e}")
+        st.error(f"API 데이터 불러오기 실패: {e}")
         return None
 
-@st.cache_data
-def load_sentiment():
-    try:
-        s_df = pd.read_csv("data/sentiment.csv")
-        s_df['ds'] = pd.to_datetime(s_df['ds'])
-        return s_df
-    except:
-        return None
-
-rate_df = fetch_exchange_rate()
-sentiment_df = load_sentiment()
-
-if rate_df is None or sentiment_df is None:
-    st.warning("환율 또는 감성 점수 데이터를 불러올 수 없습니다.")
+df = fetch_exchange_rate()
+if df is None:
     st.stop()
 
-merged_df = pd.merge(rate_df, sentiment_df, on="ds", how="inner")
+# ====== STEP 2: 사용자 예측 설정 ======
+mode = st.radio("예측 방식", ["Prophet 기반 예측", "시연용 더미 데이터"])
+start_date = st.date_input("예측 시작 날짜", datetime.today())
+days = st.slider("예측 일 수", min_value=1, max_value=30, value=7)
 
-st.sidebar.header("예측 설정")
-days = st.sidebar.slider("예측할 일 수", min_value=3, max_value=30, value=7)
+# ====== STEP 3: 예측 ======
+if mode == "Prophet 기반 예측":
+    try:
+        model = Prophet()
+        model.fit(df)
+        future = model.make_future_dataframe(periods=days)
+        forecast = model.predict(future)
+        result = forecast[['ds', 'yhat']].tail(days)
+        result.columns = ['날짜', '예측 환율 (KRW/USD)']
+    except Exception as e:
+        st.error(f"예측 실패: {e}")
+        st.stop()
+else:
+    dates = [start_date + timedelta(days=i) for i in range(days)]
+    rates = np.random.normal(1300, 5, size=days)
+    result = pd.DataFrame({
+        "날짜": dates,
+        "예측 환율 (KRW/USD)": rates
+    })
 
-try:
-    model = Prophet()
-    model.add_regressor('sentiment_score')
-    model.fit(merged_df)
-
-    future = model.make_future_dataframe(periods=days)
-    future = future.merge(sentiment_df, on="ds", how="left")
-    future['sentiment_score'].fillna(method='ffill', inplace=True)
-
-    forecast = model.predict(future)
-    result = forecast[['ds', 'yhat']].tail(days)
-    result.columns = ['날짜', '예측 환율 (KRW/USD)']
-
-    st.subheader("📈 예측 결과")
-    st.line_chart(result.set_index("날짜"))
-    st.dataframe(result)
-
-except Exception as e:
-    st.error(f"모델 예측 실패: {e}")
+# ====== STEP 4: 출력 ======
+st.line_chart(result.set_index("날짜"))
+st.dataframe(result)
